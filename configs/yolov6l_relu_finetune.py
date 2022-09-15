@@ -1,18 +1,20 @@
-# YOLOv6t model
+# YOLOv6l model
 model = dict(
-    type='YOLOv6t',
-    pretrained='./weights/yolov6t.pt',
-    depth_multiple=0.25,  
-    width_multiple=0.50,
+    type='YOLOv6l_relu',
+    pretrained='weights/yolov6l_relu.pt',
+    depth_multiple=1.0,  
+    width_multiple=1.0,
     backbone=dict(
-        type='EfficientRep',
+        type='CSPBepBackbone',
         num_repeats=[1, 6, 12, 18, 6],
         out_channels=[64, 128, 256, 512, 1024],
+        csp_e=float(1)/2,
         ),
     neck=dict(
-        type='RepPAN',
+        type='CSPRepPANNeck',
         num_repeats=[12, 12, 12, 12],
         out_channels=[256, 128, 128, 256, 256, 512],
+        csp_e=float(1)/2,
         ),
     head=dict(
         type='EffiDeHead',
@@ -22,9 +24,15 @@ model = dict(
         anchors=1,
         out_indices=[17, 20, 23],
         strides=[8, 16, 32],
-        iou_type='ciou'
+        iou_type='giou',
+        use_dfl=True,
+        reg_max=16, #if use_dfl is False, please set reg_max to 0
+        distill_weight={
+            'class': 1.0,
+            'dfl': 1.0,
+        },
     )
-)   
+)
 
 solver = dict(
     optim='SGD',
@@ -35,9 +43,9 @@ solver = dict(
     weight_decay=0.00036,
     warmup_epochs=2.0,
     warmup_momentum=0.5,
-    warmup_bias_lr=0.05 
+    warmup_bias_lr=0.05
 )
- 
+
 data_aug = dict(
     hsv_h=0.0138,
     hsv_s=0.664,
