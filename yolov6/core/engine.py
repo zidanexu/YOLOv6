@@ -110,7 +110,7 @@ class Trainer:
         try:
             self.prepare_for_steps()
             for self.step, self.batch_data in self.pbar:
-                self.train_in_steps(epoch_num)
+                self.train_in_steps(epoch_num, self.step)
                 self.print_details()
         except Exception as _:
             LOGGER.error('ERROR in training steps.')
@@ -122,7 +122,7 @@ class Trainer:
             raise
 
     # Training loop for batchdata
-    def train_in_steps(self, epoch_num):
+    def train_in_steps(self, epoch_num, step_num):
         images, targets = self.prepro_data(self.batch_data, self.device)
         # plot train_batch and save to tensorboard once an epoch
         if self.write_trainbatch_tb and self.main_process and self.step == 0:
@@ -137,9 +137,9 @@ class Trainer:
                     t_preds, t_featmaps = self.teacher_model(images)
                 temperature = self.args.temperature
                 total_loss, loss_items = self.compute_loss_distill(preds, t_preds, s_featmaps, t_featmaps, targets, \
-                                                                   epoch_num, self.max_epoch, temperature)
+                                                                   epoch_num, self.max_epoch, temperature, step_num)
             else:
-                total_loss, loss_items = self.compute_loss(preds, targets, epoch_num)
+                total_loss, loss_items = self.compute_loss(preds, targets, epoch_num, step_num)
             if self.rank != -1:
                 total_loss *= self.world_size
         # backward
@@ -199,8 +199,11 @@ class Trainer:
                             task='train')
         else:
             def get_cfg_value(cfg_dict, value_str, default_value):
-                if value_str in cfg_dict and cfg_dict[value_str] is not None:
-                    return cfg_dict[value_str]
+                if value_str in cfg_dict:
+                    if isinstance(cfg_dict[value_str], list):
+                        return cfg_dict[value_str][0] if cfg_dict[value_str][0] is not None else default_value
+                    else:
+                        return cfg_dict[value_str] if cfg_dict[value_str] is not None else default_value
                 else:
                     return default_value
             eval_img_size = get_cfg_value(self.cfg.eval_params, "img_size", self.img_size)
@@ -393,6 +396,7 @@ class Trainer:
     def get_optimizer(self, args, cfg, model):
         accumulate = max(1, round(64 / args.batch_size))
         cfg.solver.weight_decay *= args.batch_size * accumulate / 64
+        cfg.solver.lr0 *= args.batch_size / (self.world_size * 32) # rescale lr0 related to batchsize
         optimizer = build_optimizer(cfg, model)
         return optimizer
 
@@ -503,7 +507,7 @@ class Trainer:
             from tools.qat.qat_utils import qat_init_model_manu, skip_sensitive_layers
             qat_init_model_manu(model, cfg, self.args)
             # workaround
-            model.neck.upsample_enable_quant()
+            model.neck.upsample_enable_quant(cfg.ptq.num_bits, cfg.ptq.calib_method)
             # if self.main_process:
             #     print(model)
             # QAT

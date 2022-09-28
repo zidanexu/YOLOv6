@@ -27,11 +27,29 @@ op_concat_fusion_list = [
     ('detect.reg_convs.1.conv', 'detect.cls_convs.1.conv'),
     ('detect.reg_convs.2.conv', 'detect.cls_convs.2.conv'),
 ]
-def get_yolov6_config(key):
-    # config_dict = {'yolov6s_v2_reopt.pt': '../../configs/repopt/yolov6s_opt_qat.py'}
-    # return config_dict[key]
-    return '../../configs/repopt/yolov6s_opt_qat.py'
-# python3 qat_export.py --weights yolov6s_v2_reopt.pt --quant-weights yolov6s_v2_reopt_qat_43.0.pt --export-batch-size 1
+
+def zero_scale_fix(model, device):
+
+    for k, m in model.named_modules():
+        # print(k, m)
+        if isinstance(m, quant_nn.QuantConv2d) or \
+            isinstance(m, quant_nn.QuantConvTranspose2d):
+            # print(m)
+            # print(m._weight_quantizer._amax)
+            weight_amax = m._weight_quantizer._amax.detach().cpu().numpy()
+            # print(weight_amax)
+            print(k)
+            ones = np.ones_like(weight_amax)
+            print("zero scale number = {}".format(np.sum(weight_amax == 0.0)))
+            weight_amax = np.where(weight_amax == 0.0, ones, weight_amax)
+            m._weight_quantizer._amax.copy_(torch.from_numpy(weight_amax).to(device))
+        else:
+            # module can not be quantized, continue
+            continue
+
+# python3 qat_export.py --weights yolov6s_v2_reopt.pt --quant-weights yolov6s_v2_reopt_qat_43.0.pt --export-batch-size 1 --conf ../../configs/repopt/yolov6s_opt_qat.py
+# python3 qat_export.py --weights v6s_t.pt --quant-weights yolov6t_v2_reopt_qat_40.1.pt --export-batch-size 1 --conf ../../configs/repopt/yolov6_tiny_opt_qat.py
+# python3 qat_export.py --weights v6s_n.pt --quant-weights yolov6n_v2_reopt_qat_34.9.pt --export-batch-size 1 --conf ../../configs/repopt/yolov6n_opt_qat.py
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', type=str, default='./yolov6s_v2_reopt.pt', help='weights path')
@@ -39,12 +57,18 @@ if __name__ == '__main__':
     parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='image size')  # height, width
     parser.add_argument('--conf', type=str, default='../../configs/repopt/yolov6s_opt_qat.py', help='model config')
     parser.add_argument('--export-batch-size', type=int, default=None, help='export batch size')
-    parser.add_argument('--calib', action='store_true', help='indicate calibrated model')
+    parser.add_argument('--calib', action='store_true', default=False, help='calibrated model')
+    parser.add_argument('--scale-fix', action='store_true', help='enable scale fix')
     parser.add_argument('--fuse-bn', action='store_true', help='fuse bn')
     parser.add_argument('--graph-opt', action='store_true', help='enable graph optimizer')
-    parser.add_argument('--skip-qat-sensitive', action='store_true', help='skip qat sensitive layers')
-    parser.add_argument('--skip-ptq-sensitive', action='store_true', help='skip ptq sensitive layers')
     parser.add_argument('--inplace', action='store_true', help='set Detect() inplace=True')
+    parser.add_argument('--end2end', action='store_true', help='export end2end onnx')
+    parser.add_argument('--trt-version', type=int, default=8, help='tensorrt version')
+    parser.add_argument('--with-preprocess', action='store_true', help='export bgr2rgb and normalize')
+    parser.add_argument('--max-wh', type=int, default=None, help='None for tensorrt nms, int value for onnx-runtime nms')
+    parser.add_argument('--topk-all', type=int, default=100, help='topk objects for every images')
+    parser.add_argument('--iou-thres', type=float, default=0.45, help='iou threshold for NMS')
+    parser.add_argument('--conf-thres', type=float, default=0.4, help='conf threshold for NMS')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0, 1, 2, 3 or cpu')
     parser.add_argument('--eval-yaml', type=str, default='../partial_quantization/eval.yaml', help='evaluation config')
     args = parser.parse_args()
@@ -71,10 +95,12 @@ if __name__ == '__main__':
     cfg = Config.fromfile(args.conf)
     # init qat model
     qat_init_model_manu(model, cfg, args)
-    model.neck.upsample_enable_quant()
+    model.neck.upsample_enable_quant(cfg.ptq.num_bits, cfg.ptq.calib_method)
     ckpt = torch.load(args.quant_weights)
     model.load_state_dict(ckpt['model'].float().state_dict())
     model.to(device)
+    if args.scale_fix:
+        zero_scale_fix(model, device)
     if args.graph_opt:
         # concat amax fusion
         for sub_fusion_list in op_concat_fusion_list:
@@ -82,6 +108,10 @@ if __name__ == '__main__':
             concat_quant_amax_fuse(ops)
     qat_mAP = yolov6_evaler.eval(model)
     print(qat_mAP)
+    if args.end2end:
+        from yolov6.models.end2end import End2End
+        model = End2End(model, max_obj=args.topk_all, iou_thres=args.iou_thres,score_thres=args.conf_thres,
+                        max_wh=args.max_wh, device=device, trt_version=args.trt_version, with_preprocess=args.with_preprocess)
     # ONNX export
     quant_nn.TensorQuantizer.use_fb_fake_quant = True
     if args.export_batch_size is None:
@@ -89,7 +119,18 @@ if __name__ == '__main__':
         export_file = args.quant_weights.replace('.pt', '_dynamic.onnx')  # filename
         if args.graph_opt:
             export_file = export_file.replace('.onnx', '_graph_opt.onnx')
-        dynamic_axes = {"image_arrays": {0: "batch"}, "outputs": {0: "batch"}}
+        if args.end2end:
+            export_file = export_file.replace('.onnx', '_e2e.onnx')
+        dynamic_axes = {
+            "image_arrays": {0: "batch"},
+        }
+        if args.end2end:
+            dynamic_axes["num_dets"] = {0: "batch"}
+            dynamic_axes["det_boxes"] = {0: "batch"}
+            dynamic_axes["det_scores"] = {0: "batch"}
+            dynamic_axes["det_classes"] = {0: "batch"}
+        else:
+            dynamic_axes["outputs"] = {0: "batch"}
         torch.onnx.export(model,
                           img,
                           export_file,
@@ -98,7 +139,8 @@ if __name__ == '__main__':
                           training=torch.onnx.TrainingMode.EVAL,
                           do_constant_folding=True,
                           input_names=['image_arrays'],
-                          output_names=['outputs'],
+                          output_names=['num_dets', 'det_boxes', 'det_scores', 'det_classes']
+                          if args.end2end else ['outputs'],
                           dynamic_axes=dynamic_axes
                          )
     else:
@@ -106,6 +148,8 @@ if __name__ == '__main__':
         export_file = args.quant_weights.replace('.pt', '_bs{}.onnx'.format(args.export_batch_size))  # filename
         if args.graph_opt:
             export_file = export_file.replace('.onnx', '_graph_opt.onnx')
+        if args.end2end:
+            export_file = export_file.replace('.onnx', '_e2e.onnx')
         torch.onnx.export(model,
                           img,
                           export_file,
@@ -114,5 +158,6 @@ if __name__ == '__main__':
                           training=torch.onnx.TrainingMode.EVAL,
                           do_constant_folding=True,
                           input_names=['image_arrays'],
-                          output_names=['outputs']
+                          output_names=['num_dets', 'det_boxes', 'det_scores', 'det_classes']
+                          if args.end2end else ['outputs'],
                           )

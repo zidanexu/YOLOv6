@@ -34,13 +34,17 @@ class Inferer:
         self.stride = self.model.stride
         self.class_names = load_yaml(yaml)['names']
         self.img_size = self.check_img_size(self.img_size, s=self.stride)  # check image size
+        self.half = half
+
+        # Switch model to deploy status
+        self.model_switch(self.model.model, self.img_size)
 
         # Half precision
-        if half & (self.device.type != 'cpu'):
+        if self.half & (self.device.type != 'cpu'):
             self.model.model.half()
         else:
             self.model.model.float()
-            half = False
+            self.half = False
 
         if self.device.type != 'cpu':
             self.model(torch.zeros(1, 3, *self.img_size).to(self.device).type_as(next(self.model.model.parameters())))  # warmup
@@ -49,8 +53,7 @@ class Inferer:
         self.files = LoadData(source)
         self.source = source
 
-        # Switch model to deploy status
-        self.model_switch(self.model.model, self.img_size)
+        
 
     def model_switch(self, model, img_size):
         ''' Model switch to deploy status '''
@@ -227,7 +230,7 @@ class Inferer:
         return text_size
 
     @staticmethod
-    def plot_box_and_label(image, lw, box, label='', color=(128, 128, 128), txt_color=(255, 255, 255)):
+    def plot_box_and_label(image, lw, box, label='', color=(128, 128, 128), txt_color=(255, 255, 255), font=cv2.FONT_HERSHEY_COMPLEX):
         # Add one xyxy box to image with label
         p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
         cv2.rectangle(image, p1, p2, color, thickness=lw, lineType=cv2.LINE_AA)
@@ -237,7 +240,7 @@ class Inferer:
             outside = p1[1] - h - 3 >= 0  # label fits outside box
             p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
             cv2.rectangle(image, p1, p2, color, -1, cv2.LINE_AA)  # filled
-            cv2.putText(image, label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, lw / 3, txt_color,
+            cv2.putText(image, label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), font, lw / 3, txt_color,
                         thickness=tf, lineType=cv2.LINE_AA)
 
     @staticmethod

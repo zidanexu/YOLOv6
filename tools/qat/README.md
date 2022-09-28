@@ -18,7 +18,7 @@ pip install --extra-index-url=https://pypi.ngc.nvidia.com --trusted-host pypi.ng
 
 ## Training with RepOptimizer
 Firstly, train a `YOLOv6-S RepOpt` as follows, or download our realeased [checkpoint](https://github.com/meituan/YOLOv6/releases/download/0.2.0/yolov6s_v2_reopt.pt) and [scales](https://github.com/meituan/YOLOv6/releases/download/0.2.0/yolov6s_v2_scale.pt).
-*  [Tutorial of RepOpt for YOLOv6](./docs/tutorial_repopt.md)
+*  [Tutorial of RepOpt for YOLOv6](https://github.com/meituan/YOLOv6/blob/main/docs/tutorial_repopt.md)
 ## PTQ
 We perform PTQ to get the range of activations and weights.
 ```python
@@ -72,5 +72,9 @@ We release our quantized and graph-optimized YOLOv6-S (v0.2.0) model. The follow
 
 | Model           | Size        | Precision        |mAP<sup>val<br/>0.5:0.95 | Speed<sup>T4<br/>trt b1 <br/>(fps) | Speed<sup>T4<br/>trt b32 <br/>(fps) |
 | :-------------- | ----------- | ----------- |:----------------------- | ---------------------------------------- | -----------------------------------|
-| [**YOLOv6-S RepOpt**] | 640 | INT8         |43.3                     | 596     | 869  |
+| [**YOLOv6-S RepOpt**] | 640 | INT8         |43.3                     | 619     | 924  |
 | [**YOLOv6-S**] | 640         | FP16         |43.4                     | 377    | 541 |
+| [**YOLOv6-T RepOpt**] | 640 | INT8         |39.8                     | 741     | 1167  |
+| [**YOLOv6-T**] | 640         | FP16         |40.3                     | 449    | 659 |
+| [**YOLOv6-N RepOpt**] | 640 | INT8         |34.8                     | 1114     | 1828  |
+| [**YOLOv6-N**] | 640         | FP16         |35.9                     | 802    | 1234 |

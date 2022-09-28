@@ -32,6 +32,8 @@ from yolov6.utils.events import LOGGER
 # Parameters
 IMG_FORMATS = ["bmp", "jpg", "jpeg", "png", "tif", "tiff", "dng", "webp", "mpo"]
 VID_FORMATS = ["mp4", "mov", "avi", "mkv"]
+IMG_FORMATS.extend([f.upper() for f in IMG_FORMATS])
+VID_FORMATS.extend([f.upper() for f in VID_FORMATS])
 # Get orientation exif tag
 for k, v in ExifTags.TAGS.items():
     if v == "Orientation":
@@ -57,7 +59,7 @@ class TrainValDataset(Dataset):
         data_dict=None,
         task="train",
     ):
-        assert task.lower() in ("train", "val", "speed"), f"Not supported task: {task}"
+        assert task.lower() in ("train", "val", "test", "speed"), f"Not supported task: {task}"
         t1 = time.time()
         self.__dict__.update(locals())
         self.main_process = self.rank in (-1, 0)
@@ -116,7 +118,7 @@ class TrainValDataset(Dataset):
             else:
                 img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
                   
-            shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
+            shapes = (h0, w0), ((h * ratio / h0, w * ratio / w0), pad)  # for COCO mAP rescaling
 
             labels = self.labels[index].copy()
             if labels.size:
@@ -442,6 +444,7 @@ class TrainValDataset(Dataset):
         try:
             im = Image.open(im_file)
             im.verify()  # PIL verify
+            im = Image.open(im_file)  # need to reload the image after using verify()
             shape = im.size  # (width, height)
             try:
                 im_exif = im._getexif()

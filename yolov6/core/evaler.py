@@ -105,7 +105,7 @@ class Evaler:
         '''
         self.speed_result = torch.zeros(4, device=self.device)
         pred_results = []
-        pbar = tqdm(dataloader, desc="Inferencing model in val datasets.", ncols=NCOLS)
+        pbar = tqdm(dataloader, desc=f"Inferencing model in {task} datasets.", ncols=NCOLS)
 
         # whether to compute metric and plot PR curve and P、R、F1 curve under iou50 match rule
         if self.do_pr_metric:
@@ -179,8 +179,8 @@ class Evaler:
 
                     # target boxes
                     tbox = xywh2xyxy(labels[:, 1:5])
-                    tbox[:, [0, 2]] *= imgs[si].shape[1:][0]
-                    tbox[:, [1, 3]] *= imgs[si].shape[1:][1]
+                    tbox[:, [0, 2]] *= imgs[si].shape[1:][1]
+                    tbox[:, [1, 3]] *= imgs[si].shape[1:][0]
 
                     self.scale_coords(imgs[si].shape[1:], tbox, shapes[si][0], shapes[si][1])  # native-space labels
 
@@ -202,7 +202,7 @@ class Evaler:
 
                 from yolov6.utils.metrics import ap_per_class
                 p, r, ap, f1, ap_class = ap_per_class(*stats, plot=self.plot_curve, save_dir=self.save_dir, names=model.names)
-                AP50_F1_max_idx = f1.mean(0).argmax()
+                AP50_F1_max_idx = len(f1.mean(0)) - f1.mean(0)[::-1].argmax() -1
                 LOGGER.info(f"IOU 50 best mF1 thershold near {AP50_F1_max_idx/1000.0}.")
                 ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
                 mp, mr, map50, map = p[:, AP50_F1_max_idx].mean(), r[:, AP50_F1_max_idx].mean(), ap50.mean(), ap.mean()
@@ -248,8 +248,9 @@ class Evaler:
                 anno_json = self.data['anno_path']
             else:
                 # generated coco format labels in dataset initialization
-                dataset_root = os.path.dirname(os.path.dirname(self.data['val']))
-                base_name = os.path.basename(self.data['val'])
+                task = 'val' if task == 'train' else task
+                dataset_root = os.path.dirname(os.path.dirname(self.data[task]))
+                base_name = os.path.basename(self.data[task])
                 anno_json = os.path.join(dataset_root, 'annotations', f'instances_{base_name}.json')
             pred_json = os.path.join(self.save_dir, "predictions.json")
             LOGGER.info(f'Saving {pred_json}...')
@@ -278,7 +279,7 @@ class Evaler:
                     if ann_i["ignore"]:
                         continue
                     val_dataset_anns_count += 1
-                    nc_i = self.coco80_to_coco91_class().index(ann_i['category_id'])
+                    nc_i = self.coco80_to_coco91_class().index(ann_i['category_id']) if self.is_coco else ann_i['category_id']
                     label_count_dicts[nc_i]["images"].add(ann_i["image_id"])
                     label_count_dicts[nc_i]["anns"] += 1
                 
@@ -393,14 +394,14 @@ class Evaler:
 
     @staticmethod
     def check_task(task):
-        if task not in ['train', 'val', 'speed']:
-            raise Exception("task argument error: only support 'train' / 'val' / 'speed' task.")
+        if task not in ['train', 'val', 'test', 'speed']:
+            raise Exception("task argument error: only support 'train' / 'val' / 'test' / 'speed' task.")
 
     @staticmethod
     def check_thres(conf_thres, iou_thres, task):
         '''Check whether confidence and iou threshold are best for task val/speed'''
         if task != 'train':
-            if task == 'val':
+            if task == 'val' or task == 'test':
                 if conf_thres > 0.03:
                     LOGGER.warning(f'The best conf_thresh when evaluate the model is less than 0.03, while you set it to: {conf_thres}')
                 if iou_thres != 0.65:
@@ -424,11 +425,12 @@ class Evaler:
         return device
 
     @staticmethod
-    def reload_dataset(data):
+    def reload_dataset(data, task='val'):
         with open(data, errors='ignore') as yaml_file:
             data = yaml.safe_load(yaml_file)
-        val = data.get('val')
-        if not os.path.exists(val):
+        task = 'val' if task == 'train' else task
+        path = data.get(task, 'val')
+        if not os.path.exists(path):
             raise Exception('Dataset not found.')
         return data
 
